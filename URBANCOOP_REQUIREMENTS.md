@@ -12,6 +12,8 @@ The original approved image files were not available in this local project or re
 
 ## Implementation and configuration handoff
 
+Subsequent clarification, 15 September 2026: user confirmed **Supabase login only; records in Sheets** and username/password-only staff UX with no email login or verification flow. A dedicated UrbanCoop Supabase project (`ufdegmgaagxtswczdyyf`, Mumbai) has since been provisioned. See `SUPABASE_SETUP.md` for current setup status; it supersedes the original handoff statement below that no project was provisioned. No receipts/accounts tables should be introduced in Supabase.
+
 The application is a normal local source project. `README.md` documents setup, configuration, tests, limitations and release checks. Google Sheets is the sole business record store; Supabase handles authentication. A Cloudflare Pages Function verifies staff access and signs calls to a Google Apps Script storage adapter. No credentials, live workbook, staff accounts or deployment have been invented or provisioned.
 
 ## Final user brief (preserved in full)

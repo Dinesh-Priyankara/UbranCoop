@@ -4,6 +4,8 @@ Local, mobile-first staff application. Plain JavaScript ES modules and CSS, a Cl
 
 ## Current delivery status
 
+Supabase provisioning update: the dedicated **UrbanCoop** project has now been created and its URL/publishable key saved in local ignored configuration. See [SUPABASE_SETUP.md](SUPABASE_SETUP.md) for the verified status, username-only alias scheme, and remaining dashboard/staff-account setup. Business records remain in Google Sheets.
+
 The local application, server integration code, build, tests, and handoff documentation are included. **This is not yet a live production deployment.** Supabase, Google Apps Script/Sheets, and Cloudflare must be configured and tested against real services before staff use.
 
 Open issue: after the initial browser checks, the user reported that **Preview Receipt is not working**. Investigation started but was interrupted; no fix has been verified. Reproduce and resolve this before release. The earlier verification results describe the tested scenarios, not resolution of this later report.
