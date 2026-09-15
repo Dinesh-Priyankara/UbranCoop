@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.tools/
+.env
+.env.local
+.env.*
+!.env.example
+.dev.vars
+.wrangler/
+test-results/
+# Local ChatGPT project references and agent metadata are not application source.
+sources/
+AGENTS.md
+.codex/
+.agents/
