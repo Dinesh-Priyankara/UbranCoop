@@ -33,6 +33,6 @@ For this deployment, the internal alias namespace supersedes the generic README 
 3. Admin-create `deshan@urbancoopit.invalid` with a password chosen privately by the user and mark the identity email as confirmed. Do not send an invitation email. Last database check: zero Auth users.
 4. Set this user's admin-controlled `app_metadata.staff` to `true`, preserving other metadata. Never use `user_metadata` for permission. The portal rejects users without this flag.
 5. Verify real username/password login, session refresh, logout and denied access for non-staff.
-6. Add the same Supabase variables to Cloudflare server environment settings when deploying. Google Sheets endpoint/shared secret remain unconfigured.
+6. Add the same Supabase variables to Cloudflare server environment settings when deploying. The private Google Sheets service-account values must also be added to Cloudflare encrypted secrets.
 
 No successful end-to-end staff login is claimed yet. Do not enter credentials in tracked source or chat. No business-record schema migration is necessary for this confirmed architecture.

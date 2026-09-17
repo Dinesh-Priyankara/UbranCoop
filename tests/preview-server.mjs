@@ -4,8 +4,11 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { calculateReceipt, calculateAccounts, today } from '../src/core.js';
+import { hasGoogleSheetsConfig, writeGoogleSheets } from '../functions/api/google-sheets.js';
 const receipts=[],days=[], root=resolve('dist');
 let signedIn=false;
+const live=process.env.LIVE_SHEETS_TEST==='1';
+if(live&&!hasGoogleSheetsConfig(process.env))throw new Error('Live Sheets test configuration is incomplete.');
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,'http://127.0.0.1:4174');
@@ -16,6 +19,7 @@ const server=createServer(async(req,res)=>{
       else if(!signedIn){res.writeHead(401,{'Content-Type':'application/json'}).end(JSON.stringify({ok:false,code:'UNAUTHORIZED'}));return}
       else if(action==='logout'){signedIn=false;result=null}
       else if(action==='session')result={username:'preview.staff'};
+      else if(live&&['receipts.list','accounts.get','receipts.create','accounts.create'].includes(action))result=await writeGoogleSheets(process.env,action,data,{id:'local-live-test',email:'preview.staff@local.test'});
       else if(action==='receipts.list')result=receipts.filter(r=>r.createdDate===data.date);
       else if(action==='accounts.get')result=days.find(d=>d.date===data.date)||null;
       else if(action==='receipts.create'){result={...calculateReceipt(data),createdDate:today(),receiptId:`UC-${today().replaceAll('-','')}-${String(receipts.length+1).padStart(3,'0')}`};receipts.push(result)}
@@ -26,8 +30,8 @@ const server=createServer(async(req,res)=>{
     const path=resolve(root,'.'+decodeURIComponent(url.pathname==='/'?'/index.html':url.pathname));
     if(!path.startsWith(root+sep))throw new Error('PATH');
     let content=await readFile(path);
-    if(extname(path)==='.html')content=content.toString().replace('<body>','<body><aside style="background:#fff0cb;text-align:center;padding:8px;font:12px system-ui">LOCAL UI TEST · Fictional data · Nothing saved to Google Sheets</aside>');
+    if(extname(path)==='.html')content=content.toString().replace('<body>',`<body><aside style="background:${live?'#ffd7d7':'#fff0cb'};text-align:center;padding:8px;font:12px system-ui">${live?'LIVE GOOGLE SHEETS TEST · Saves write to the dedicated workbook':'LOCAL UI TEST · Fictional data · Nothing saved to Google Sheets'}</aside>`);
     res.writeHead(200,{'Content-Type':({'.html':'text/html','.css':'text/css','.js':'text/javascript','.svg':'image/svg+xml'})[extname(path)]||'application/octet-stream','Cache-Control':'no-store'}).end(content);
   }catch{res.writeHead(500,{'Content-Type':'application/json'}).end(JSON.stringify({ok:false,code:'ERROR'}))}
 });
-server.listen(4174,'127.0.0.1',()=>console.log('Fictional UI test: http://127.0.0.1:4174'));
+server.listen(4174,'127.0.0.1',()=>console.log(`${live?'Live Google Sheets':'Fictional UI'} test: http://127.0.0.1:4174`));

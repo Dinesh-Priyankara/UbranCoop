@@ -6,7 +6,7 @@ Local, mobile-first staff application. Plain JavaScript ES modules and CSS, a Cl
 
 Supabase provisioning update: the dedicated **UrbanCoop** project has now been created and its URL/publishable key saved in local ignored configuration. See [SUPABASE_SETUP.md](SUPABASE_SETUP.md) for the verified status, username-only alias scheme, and remaining dashboard/staff-account setup. Business records remain in Google Sheets.
 
-The local application, server integration code, build, tests, and handoff documentation are included. **This is not yet a live production deployment.** Supabase, Google Apps Script/Sheets, and Cloudflare must be configured and tested against real services before staff use.
+The local application, server integration code, build, tests, and handoff documentation are included. The private Google Sheets connection has passed one live local save/read-back test. **This is not yet a live production deployment.** Supabase staff authentication and Cloudflare still need production configuration and acceptance testing.
 
 Open issue: after the initial browser checks, the user reported that **Preview Receipt is not working**. Investigation started but was interrupted; no fix has been verified. Reproduce and resolve this before release. The earlier verification results describe the tested scenarios, not resolution of this later report.
 
@@ -35,7 +35,7 @@ npm run build
 node tests/preview-server.mjs
 ```
 
-Open `http://127.0.0.1:4174`. This explicitly labelled local test server accepts any nonempty test username/password and stores fictional records only in process memory. It binds to loopback. **Never deploy this test server.** It is excluded from `dist/` and the Pages Functions directory. Stop it when done. This is not evidence that live authentication or Google Sheets has been configured.
+Open `http://127.0.0.1:4174`. By default, this explicitly labelled local test server accepts any nonempty test username/password and stores fictional records only in process memory. With complete private Google credentials and `LIVE_SHEETS_TEST=1`, it labels itself as live and sends record actions to the dedicated workbook. It still bypasses Supabase authentication. It binds to loopback and is excluded from `dist/` and Pages Functions. **Never deploy this test server.**
 
 ## 1. Supabase configuration
 
@@ -52,17 +52,15 @@ Access and refresh tokens are sent only as HttpOnly, SameSite=Strict cookies, Se
 
 ## 2. Google Sheets configuration
 
-The secure integration uses a Google Apps Script web app running as the workbook owner. This avoids distributing Google service-account credentials. Cloudflare sends HMAC-SHA256-signed requests to it. Unsigned requests are denied, and signed requests expire after two minutes.
+The secure integration calls the Google Sheets API from server-side code with a dedicated service account. The private key stays in ignored local files or Cloudflare encrypted secrets and is never sent to browser code. The service account should have Editor access only to the UrbanCoop workbook.
 
 1. Create a private Google spreadsheet owned by the appropriate UrbanCoop admin account. Staff should use the portal rather than have direct workbook edit access.
-2. Create **one** Apps Script project for this workbook. Paste the generated `google-apps-script/Code.gs` into it and use `google-apps-script/appsscript.json` as its manifest. Enable the **Google Sheets API advanced service**. If using a standard Google Cloud project, enable the Sheets API there too.
-3. In Apps Script Project Settings → Script Properties, set `SPREADSHEET_ID` and `SHARED_SECRET`. Use a cryptographically random secret of at least 32 characters. Supply that same secret as `SHEETS_SHARED_SECRET` to Cloudflare. Never put it in browser code or commit it.
-4. Run `setup()` once as the owner and authorize the Sheets scope. This creates the three tabs and exact headers, sets the timezone, and freezes headers. Existing nonmatching headers fail rather than overwrite records.
-5. Deploy as a **web app**, **execute as the owner**, with access permitting server-side calls (the `Anyone` deployment setting). The endpoint accepts only valid signed requests; the workbook itself remains private. Some Workspace organizations disallow this deployment setting; an admin must enable an approved integration path before launch.
-6. Put the resulting `/exec` URL in `SHEETS_SCRIPT_URL` on Cloudflare and in `.env`.
-7. After source changes, run `npm run build`, replace Apps Script with the newly generated Code.gs, and update its deployed version. Edit `server/sheets.gs` and `src/core.js`, not the generated file.
+2. Create a Google Cloud service account in a project with the Google Sheets API enabled. Do not grant it project IAM roles.
+3. Share only the target workbook with the service-account email as Editor.
+4. Store `GOOGLE_SHEET_ID`, the three numeric tab IDs, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` as server-side secrets. Never put them in browser code or commit them.
+5. Add the same values to Cloudflare before production deployment. Keep `LIVE_SHEETS_TEST` unset in Cloudflare.
 
-The `setup()` function is the workbook creation/setup mechanism; no live workbook has been created in your account during this task.
+The legacy Apps Script source remains in the repository for historical reference and is not part of the active runtime path.
 
 ### Record structure
 
@@ -70,9 +68,9 @@ The `setup()` function is the workbook creation/setup mechanism; no live workboo
 - **Account Days**: one row per date with opening/in/out/expected totals, submitted flag/time, staff identity, request ID/hash.
 - **Account Transactions**: one row per transaction with transaction ID, day ID, date, IN/OUT type, description, amount.
 
-The exact headers are in `server/sheets.gs`. Apps Script writes explicit string/number/boolean cells; customer text starting with `=` is never interpreted as a spreadsheet formula. It uses one script lock across reads and writes, computes receipt sequences under the lock, rejects duplicate dates, and stores each account day and its transactions in one atomic Sheets batch. Request IDs make unchanged retries idempotent. Do not deploy two separate Apps Script projects against the same workbook, because their script locks would be independent. Never manually sort partial columns, change headers, delete rows, or write alongside the integration while it is processing records.
+The exact headers are enforced by `functions/api/google-sheets.js`. The integration writes explicit string/number/boolean cells, so customer text starting with `=` is never interpreted as a spreadsheet formula. Account days and their transactions are appended in one Sheets batch, and request IDs make unchanged retries idempotent. The current mutation queue serializes writes inside one server instance; distributed concurrent writes must be tested and coordinated before multi-instance production use. Never manually sort partial columns, change headers, delete rows, or write alongside the integration while it is processing records.
 
-Sheets history currently scans the record tabs. This is appropriate for a small staff portal but needs quota/latency monitoring and eventual archival/indexing as records grow. Apps Script quotas and execution limits still apply. There is no offline submission queue. A save is only shown as successful after Sheets confirms it. After a network failure, retry the unchanged form; do not reload or edit until checking history if the outcome is uncertain.
+Sheets history currently scans the record tabs. This is appropriate for a small staff portal but needs quota/latency monitoring and eventual archival/indexing as records grow. Sheets API quotas still apply. There is no offline submission queue. A save is only shown as successful after Sheets confirms it. After a network failure, retry the unchanged form; do not reload or edit until checking history if the outcome is uncertain.
 
 ## 3. Cloudflare Pages deployment
 
@@ -96,9 +94,10 @@ src/components.js          Shared accessible buttons, icons, labels, dialogs
 src/styles.css             Cream/green visual tokens and responsive styling
 src/api.js                 Same-origin API client; no tokens in JS storage
 src/core.js                Pricing, dates, accounts, validation (shared)
-functions/api/portal.js    Supabase session checks, validation, signed Sheets calls
-server/sheets.gs           Locking, idempotency, canonical record storage
-google-apps-script/        Generated deployable Apps Script and manifest
+functions/api/portal.js    Supabase session checks and request validation
+functions/api/google-sheets.js  Private Sheets API storage adapter
+server/sheets.gs           Legacy Apps Script adapter source
+google-apps-script/        Generated legacy Apps Script and manifest
 scripts/build.mjs          Syntax checks and static/GAS build
 scripts/dev.mjs            Local real-backend development server
 tests/                     Unit, API, adapter tests and isolated UI test server
@@ -108,12 +107,12 @@ Drafts live in memory, not localStorage. Internal navigation and browser Back as
 
 ## Verification and remaining release work
 
-`npm test` covers rate boundaries, mixed pets, calendar dates/Colombo midnight, cash arithmetic, authorization, cookies, origin checks, server pricing, Google request signing, receipt sequence/retries, formula-safe text, canonical history, account atomic writes/locks, altered retries, and expired/unsigned requests. The Sheets adapter tests use a mocked spreadsheet and lock; they do not prove real Google deployment permissions or quota behavior.
+`npm test` covers rate boundaries, mixed pets, calendar dates/Colombo midnight, cash arithmetic, authorization, cookies, origin checks, server pricing, private Sheets API appends, receipt sequence/retries, formula-safe text, canonical history, account atomic writes/locks, and altered retries. Automated Sheets requests are mocked; the separate live test verifies one real website save and read-back, but not concurrent or quota behavior.
 
 Before live release:
 
 1. Supply the Supabase project, publishable key, username domain, and admin-provisioned staff accounts.
-2. Create/configure the workbook and Apps Script deployment, and set the shared secret in both server environments.
+2. Add the verified Google service-account values to Cloudflare encrypted secrets.
 3. Deploy the Pages app and configure rate limits and the custom domain.
 4. Verify real login/logout/session refresh, staff revocation, live receipt save/history, and live daily submission/history. Test two simultaneous staff submissions and a lost-response retry against the real workbook.
 5. Compare all screens with the missing approved mockups, including the exact Home glance design. Confirm the provisional mixed-pet controls and numeric limits (25 pets per species in UI, 50 total in backend; 3,650-night stay; 200 transactions/day).

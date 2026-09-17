@@ -1,4 +1,5 @@
-import { calculateReceipt, calculateAccounts, dateValue, today } from '../../src/core.js';
+import { calculateReceipt, calculateAccounts, dateValue } from '../../src/core.js';
+import { hasGoogleSheetsConfig, writeGoogleSheets } from './google-sheets.js';
 
 const json = (body, status, cookies = []) => {
   const headers = new Headers({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" });
@@ -19,14 +20,7 @@ function sessionCookies(session, secure) {
   return [cookie('uc_access', session.access_token, session.expires_in ?? 3600, secure), cookie('uc_refresh', session.refresh_token, 604800, secure)];
 }
 export async function sheets(env, action, data, user) {
-  const payload = JSON.stringify({ action, data, createdBy: user.id, username: user.email.split('@')[0], createdDate: today(), timestamp: Date.now() });
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.SHEETS_SHARED_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
-  const signature = Array.from(new Uint8Array(mac), b => b.toString(16).padStart(2, '0')).join('');
-  const res = await fetch(env.SHEETS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payload, signature }), redirect: 'follow', signal: AbortSignal.timeout(30000) });
-  const result = await res.json();
-  if (!res.ok || !result.ok) throw new Error(result.code === 'LOCKED' ? 'LOCKED' : 'SHEETS');
-  return result.data;
+  return writeGoogleSheets(env, action, data, user);
 }
 export async function onRequest({ request, env }) {
   if (request.method !== 'POST') return fail('METHOD', 405);
@@ -71,7 +65,7 @@ export async function onRequest({ request, env }) {
       return json({ ok: true, data: null }, 200, clear());
     }
     if (action === 'session') return json({ ok: true, data: { username: user.email.split('@')[0] } }, 200, cookies);
-    if (!env.SHEETS_SCRIPT_URL?.startsWith('https://script.google.com/macros/s/') || !env.SHEETS_SHARED_SECRET || env.SHEETS_SHARED_SECRET.length < 32) return fail('CONFIGURATION', 503, cookies);
+    if (!hasGoogleSheetsConfig(env)) return fail('CONFIGURATION', 503, cookies);
     let clean;
     try {
       if (['receipts.list', 'accounts.get'].includes(action)) { dateValue(data.date); clean = { date: data.date }; }
