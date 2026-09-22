@@ -15,7 +15,7 @@ const paths = {
   logout: '<path d="M10 4H4v16h6M10 12h11m-4-4 4 4-4 4"/>'
 };
 export const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.paw}</svg>`;
-export const brand = () => `<div class="brand"><span class="brand-mark">${icon('paw')}</span><span>UrbanCoop<small>Pet Boarding</small></span></div>`;
+export const brand = () => `<div class="brand"><span class="brand-logo"><img src="/urbancoop-logo.jpg" alt="UrbanCoop"></span></div>`;
 export const button = (label, action, secondary = false, extra = '') => `<button type="button" class="button ${secondary ? 'secondary' : ''}" data-action="${action}" ${extra}>${label}</button>`;
 export const field = (label, name, value = '', options = '') => `<label class="field"><span>${label}</span><input name="${name}" value="${escape(value)}" ${options}></label>`;
 export const loading = () => `<div class="loading" role="status"><span class="pet-bounce">${icon('dog')}${icon('cat')}</span><span>Loading...</span></div>`;

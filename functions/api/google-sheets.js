@@ -1,10 +1,11 @@
 import { calculateReceipt, calculateAccounts, dateValue, today } from '../../src/core.js';
 
 const HEADERS = {
-  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetsJSON','CheckInDate','PickupDate','Nights','LinesJSON','StandardTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
+  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
   'Account Days': ['AccountDayID','Date','OpeningCash','TotalCashIn','TotalCashOut','ExpectedCash','Submitted','SubmittedAt','CreatedBy','Username','RequestID','RequestHash'],
   'Account Transactions': ['TransactionID','AccountDayID','Date','Type','Description','Amount']
 };
+const LEGACY_RECEIPT_HEADERS = ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetsJSON','CheckInDate','PickupDate','Nights','LinesJSON','StandardTotal','FinalTotal','PricingVersion','RequestID','RequestHash'];
 
 const SHEET_ID_ENV = {
   Receipts: 'GOOGLE_RECEIPTS_SHEET_ID',
@@ -121,6 +122,12 @@ async function rows(env, name) {
   const range = encodeURIComponent(`'${name.replaceAll("'", "''")}'!A1:${String.fromCharCode(64 + HEADERS[name].length)}`);
   const result = await googleRequest(env, `/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`, `sheets.read.${name}`);
   const values = result.values || [];
+  if (name === 'Receipts' && JSON.stringify(values[0] || []) === JSON.stringify(LEGACY_RECEIPT_HEADERS)) {
+    const migrated = values.slice(1).map(migrateLegacyReceiptRow);
+    const sheetId = Number(env[SHEET_ID_ENV.Receipts]);
+    await googleRequest(env, ':batchUpdate', 'sheets.schema.migrate.Receipts', { method: 'POST', body: JSON.stringify({ requests: [{ updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [HEADERS.Receipts, ...migrated].map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } }] }) });
+    return migrated;
+  }
   if (JSON.stringify(values[0] || []) !== JSON.stringify(HEADERS[name])) throw sheetsError('SHEETS_SCHEMA', `sheets.schema.${name}`, { reason: 'header_mismatch' });
   return values.slice(1).map(row => Array.from({ length: HEADERS[name].length }, (_, index) => row[index] ?? ''));
 }
@@ -143,7 +150,20 @@ async function hash(value) {
 }
 
 function receiptFrom(row) {
-  return { receiptId: row[0], createdDate: row[1], createdAt: row[2], customerName: row[5], contactNumber: row[6], pets: JSON.parse(row[7]), checkInDate: row[8], pickupDate: row[9], nights: row[10], lines: JSON.parse(row[11]), standardTotal: row[12], finalTotal: row[13], pricingVersion: row[14] };
+  const names = String(row[7] || '').split(/\r?\n/).filter(Boolean);
+  const types = String(row[8] || '').split(/\r?\n/).filter(Boolean);
+  const lines = [['dog',12,13,14],['cat',15,16,17]].filter(([,count]) => Number(row[count])).map(([type,count,rate,total]) => ({ type, count: Number(row[count]), nights: Number(row[11]), rate: Number(row[rate]), total: Number(row[total]) }));
+  const chargeNames = String(row[19] || '').split(/\r?\n/).filter(Boolean);
+  const chargeAmounts = String(row[20] || '').split(/\r?\n/).filter(Boolean);
+  return { receiptId: row[0], createdDate: row[1], createdAt: row[2], customerName: row[5], contactNumber: row[6], pets: names.map((name, index) => ({ name, type: types[index] || 'dog' })), checkInDate: row[9], pickupDate: row[10], nights: Number(row[11]), lines, standardTotal: Number(row[18]), additionalCharges: chargeNames.map((name, index) => ({ name, amount: Number(chargeAmounts[index] || 0) })), additionalChargesTotal: Number(row[21] || 0), finalTotal: Number(row[22]), pricingVersion: row[23] };
+}
+
+function migrateLegacyReceiptRow(row) {
+  const pets = JSON.parse(row[7] || '[]');
+  const lines = JSON.parse(row[11] || '[]');
+  const dog = lines.find(line => line.type === 'dog') || {};
+  const cat = lines.find(line => line.type === 'cat') || {};
+  return [row[0],row[1],row[2],row[3],row[4],row[5],row[6],pets.map(pet => pet.name).join('\n'),pets.map(pet => pet.type).join('\n'),row[8],row[9],row[10],dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,row[12], '', '', 0,row[13],row[14],row[15],row[16]];
 }
 
 function accountFrom(row, transactions) {
@@ -167,16 +187,18 @@ async function execute(env, action, data, user) {
   const currentDate = today();
   if (action === 'receipts.create') {
     const all = await rows(env, 'Receipts');
-    const previous = all.find(row => row[15] === data.requestId);
+    const previous = all.find(row => row[24] === data.requestId);
     if (previous) {
-      if (previous[16] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
+      if (previous[25] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
       return receiptFrom(previous);
     }
     const receipt = calculateReceipt(data);
     const prefix = `UC-${currentDate.replaceAll('-', '')}-`;
     const next = all.filter(row => String(row[0]).startsWith(prefix)).reduce((maximum, row) => Math.max(maximum, Number(String(row[0]).slice(prefix.length)) || 0), 0) + 1;
     const id = `${prefix}${String(next).padStart(3, '0')}`;
-    const row = [id,currentDate,timestamp,user.id,username,receipt.customerName,receipt.contactNumber,JSON.stringify(receipt.pets),receipt.checkInDate,receipt.pickupDate,receipt.nights,JSON.stringify(receipt.lines),receipt.standardTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,requestHash];
+    const dog = receipt.lines.find(line => line.type === 'dog') || {};
+    const cat = receipt.lines.find(line => line.type === 'cat') || {};
+    const row = [id,currentDate,timestamp,user.id,username,receipt.customerName,receipt.contactNumber,receipt.pets.map(pet => pet.name).join('\n'),receipt.pets.map(pet => pet.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,receipt.standardTotal,receipt.additionalCharges.map(charge => charge.name).join('\n'),receipt.additionalCharges.map(charge => charge.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,requestHash];
     await append(env, [appendRequest(env, 'Receipts', [row])]);
     return receiptFrom(row);
   }

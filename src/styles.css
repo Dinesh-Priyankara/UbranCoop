@@ -18,10 +18,9 @@ h2{font-size:18px;letter-spacing:-.35px;margin-bottom:20px}
 .icon{width:23px;height:23px;flex-shrink:0;vertical-align:middle}
 .shell{max-width:760px;margin:auto;padding-bottom:110px}
 .topbar{display:flex;justify-content:space-between;align-items:center;padding:24px 24px 20px;border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px;font-size:24px;font-weight:750;letter-spacing:-.8px;color:var(--green)}
-.brand small{display:block;font-size:10px;font-weight:500;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
-.brand-mark{width:44px;height:44px;display:grid;place-items:center;background:var(--green);color:#fff9ec;border-radius:14px}
-.brand-mark .icon{width:28px;height:28px}
+.brand{display:flex;align-items:center;color:var(--green)}
+.brand-logo{display:block;width:135px;height:68px;overflow:hidden;position:relative;flex-shrink:0}
+.brand-logo img{display:block;width:135px;height:135px;max-width:none;transform:translateY(-32px)}
 .icon-button{border:0;background:transparent;color:var(--green);min-width:44px;min-height:44px;padding:10px;display:inline-grid;place-items:center;border-radius:12px}
 .profile-button{border:1px solid #dce3d4;background:#eff2e9;border-radius:50%}
 .profile-wrap{position:relative}
@@ -99,6 +98,13 @@ main{padding:28px 24px}
 .transaction-row .icon-button{min-width:44px;padding:8px;margin-left:-2px}
 .transaction-row .icon{width:18px;height:18px}
 .transactions .button{margin-top:18px;min-height:46px}
+.additional-charges h2{margin-bottom:18px}
+.charge-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,.55fr) 44px;gap:8px;align-items:end;margin-bottom:12px}
+.charge-row .field{margin:0}
+.charge-row .field>span{font-size:11px}
+.charge-row input{font-size:13px;padding:12px 10px}
+.charge-row .icon-button{margin-bottom:2px}
+.additional-charges>.button{margin-top:18px;min-height:46px}
 .danger-text,.cash-out{color:var(--red)}
 .expected{background:#edf3e6;color:var(--green);padding:20px;border-radius:14px;margin-top:22px}
 .expected span{display:block;font-size:12px;margin-bottom:8px}
@@ -106,6 +112,8 @@ main{padding:28px 24px}
 .preview-hint{font-size:13px;color:var(--muted);text-align:center}
 .receipt-paper{padding:28px 24px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 24px #26372908;margin-bottom:22px;overflow-wrap:anywhere}
 .receipt-brand{display:flex;justify-content:center;margin-bottom:26px}
+.receipt-brand .brand-logo{width:170px;height:86px}
+.receipt-brand .brand-logo img{width:170px;height:170px;transform:translateY(-40px)}
 .receipt-label{text-align:center;border-top:1px solid var(--line);padding-top:20px}
 .receipt-label span{display:block;letter-spacing:2px;font-size:10px;color:#7a8576;margin-bottom:9px}
 .receipt-label strong{font-size:13px;color:var(--green)}

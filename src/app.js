@@ -4,7 +4,7 @@ import { escape as e, icon, brand, button, field, loading, confirmDialog } from 
 
 const app = document.querySelector('#app');
 const blankRows = () => Array.from({ length: 6 }, () => ({ description: '', amount: '' }));
-const blankReceipt = () => ({ customerName: '', contactNumber: '', petType: 'dog', dogCount: 1, catCount: 1, dogNames: [''], catNames: [''], checkInDate: today(), pickupDate: '', requestId: crypto.randomUUID() });
+const blankReceipt = () => ({ customerName: '', contactNumber: '', petType: 'dog', dogCount: 1, catCount: 1, dogNames: [''], catNames: [''], checkInDate: today(), pickupDate: '', additionalCharges: [{ name: '', amount: '' }], requestId: crypto.randomUUID() });
 const blankAccounts = () => ({ date: today(), openingCash: '', IN: blankRows(), OUT: blankRows(), requestId: crypto.randomUUID() });
 let user = null, route = 'home', dirty = false, busy = false, profile = false, tab = 'IN', receipt = blankReceipt(), accounts = blankAccounts(), preview = null, savedPreview = false, historyDate = today(), error = '', status = '', generation = 0;
 let data = null, readLoading = false, lastSubmitted = null, accountLoadFailed = false;
@@ -41,11 +41,13 @@ function petInputs(type) {
   return `<section class="pet-group"><div class="pet-count"><span>${icon(type)} Number of ${receipt.petType === 'mixed' ? `${type}s` : 'Pets'}</span><div class="stepper"><button type="button" data-count="${type}" data-step="-1" aria-label="Remove one ${type}" ${count <= 1 ? 'disabled' : ''}>−</button><output>${count}</output><button type="button" data-count="${type}" data-step="1" aria-label="Add one ${type}" ${count >= 25 ? 'disabled' : ''}>+</button></div></div>${Array.from({ length: count }, (_,i) => field(`${receipt.petType === 'mixed' ? type === 'dog' ? 'Dog' : 'Cat' : 'Pet'} ${count > 1 ? i+1+' ' : ''}Name`, `${type}Name-${i}`, receipt[`${type}Names`][i] || '', 'required maxlength="80" autocomplete="off"')).join('')}</section>`;
 }
 function receiptForm() {
-  return `<form id="receipt-form"><section class="card"><h2>Customer Details</h2>${field('Customer Name','customerName',receipt.customerName,'required maxlength="120" autocomplete="name"')}${field('Contact Number <span class="optional">(optional)</span>','contactNumber',receipt.contactNumber,'type="tel" autocomplete="tel" maxlength="30"')}</section><section class="card"><h2>Boarding Details</h2><label class="field"><span>Pet Type</span><select name="petType">${[['dog','Dog'],['cat','Cat'],['mixed','Dogs & Cats']].map(([value,label]) => `<option value="${value}" ${receipt.petType === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${receipt.petType !== 'cat' ? petInputs('dog') : ''}${receipt.petType !== 'dog' ? petInputs('cat') : ''}<div class="date-grid">${field('Check-in Date','checkInDate',receipt.checkInDate,'type="date" required')}${field('Pickup Date','pickupDate',receipt.pickupDate,'type="date" required')}</div><p class="input-hint" id="stay-hint"></p></section><section class="card estimate" id="estimate">${estimate()}</section><button class="button" type="submit">Preview Receipt ${icon('arrow')}</button></form>`;
+  const charges = receipt.additionalCharges.map((charge, index) => `<div class="charge-row">${field('Charge name',`chargeName-${index}`,charge.name,'maxlength="120" placeholder="e.g. Transport"')}${field('Amount (Rs.)',`chargeAmount-${index}`,charge.amount,'type="number" min="0.01" max="999999999" step="0.01" inputmode="decimal" placeholder="0.00"')}<button class="icon-button danger-text" type="button" data-charge-remove="${index}" aria-label="Remove additional charge ${index + 1}" ${receipt.additionalCharges.length === 1 ? 'disabled' : ''}>${icon('trash')}</button></div>`).join('');
+  return `<form id="receipt-form"><section class="card"><h2>Customer Details</h2>${field('Customer Name','customerName',receipt.customerName,'required maxlength="120" autocomplete="name"')}${field('Contact Number <span class="optional">(optional)</span>','contactNumber',receipt.contactNumber,'type="tel" autocomplete="tel" maxlength="30"')}</section><section class="card"><h2>Boarding Details</h2><label class="field"><span>Pet Type</span><select name="petType">${[['dog','Dog'],['cat','Cat'],['mixed','Dogs & Cats']].map(([value,label]) => `<option value="${value}" ${receipt.petType === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${receipt.petType !== 'cat' ? petInputs('dog') : ''}${receipt.petType !== 'dog' ? petInputs('cat') : ''}<div class="date-grid">${field('Check-in Date','checkInDate',receipt.checkInDate,'type="date" required')}${field('Pickup Date','pickupDate',receipt.pickupDate,'type="date" required')}</div><p class="input-hint" id="stay-hint"></p></section><section class="card additional-charges"><div class="section-heading"><h2>Additional Charges <span class="optional">(optional)</span></h2></div>${charges}${button('+ Add Charge','addCharge',true,receipt.additionalCharges.length >= 50 ? 'disabled' : '')}</section><section class="card estimate" id="estimate">${estimate()}</section><button class="button" type="submit">Preview Receipt ${icon('arrow')}</button></form>`;
 }
 function receiptInput() {
   const pets = ['dog','cat'].flatMap(type => receipt.petType === 'mixed' || receipt.petType === type ? Array.from({ length: receipt[`${type}Count`] }, (_,i) => ({ type, name: receipt[`${type}Names`][i] || '' })) : []);
-  return { ...receipt, pets };
+  const additionalCharges = receipt.additionalCharges.filter(charge => charge.name.trim() || charge.amount !== '');
+  return { ...receipt, pets, additionalCharges };
 }
 function estimate() {
   try {
@@ -56,13 +58,15 @@ function estimate() {
       const count = receipt[`${type}Count`], rate = rateFor(type, count, nights); total += count * rate * nights;
       return `<div class="summary-row"><span>${count} ${type}${count > 1 ? 's' : ''} × ${nights} nights</span><span>${money(rate)} / night</span></div>`;
     }).join('');
-    return `<h2>Stay Summary <span class="badge">${nights} nights</span></h2>${lines}<div class="summary-total"><span>Booking Total</span><strong>${money(total)}</strong></div>`;
+    const chargesTotal = receipt.additionalCharges.reduce((sum, charge) => sum + (Number.isFinite(Number(charge.amount)) ? Math.round(Number(charge.amount) * 100) : 0), 0) / 100;
+    return `<h2>Stay Summary <span class="badge">${nights} nights</span></h2>${lines}${chargesTotal ? `<div class="summary-row"><span>Additional charges</span><strong>${money(chargesTotal)}</strong></div>` : ''}<div class="summary-total"><span>Final Total</span><strong>${money(total + chargesTotal)}</strong></div>`;
   } catch { return '<h2>Stay Summary</h2><p class="muted">Choose your stay dates to calculate the total.</p>'; }
 }
 function receiptPreview() {
   if (!preview) return '';
   const r = preview;
-  return `${!savedPreview ? '<p class="preview-hint">Review the details before saving.</p>' : '<p class="preview-hint">Saved receipt · Ready to share with your customer</p>'}<article class="receipt-paper"><div class="receipt-brand">${brand()}</div><div class="receipt-label"><span>BOARDING RECEIPT</span><strong>${e(r.receiptId || 'Preview · Not saved')}</strong></div>${r.createdDate ? `<p class="receipt-date">${e(r.createdDate)}</p>` : ''}<div class="receipt-customer"><small>CUSTOMER</small><h2>${e(r.customerName)}</h2>${r.contactNumber ? `<p>${e(r.contactNumber)}</p>` : ''}</div><div class="receipt-pets">${r.pets.map(p => `<span>${icon(p.type)}${e(p.name)}</span>`).join('')}</div><div class="receipt-dates"><div><small>CHECK-IN</small><strong>${e(r.checkInDate)}</strong></div><div><small>PICKUP</small><strong>${e(r.pickupDate)}</strong></div><div><small>STAY</small><strong>${r.nights} nights</strong></div></div><div class="receipt-lines">${r.lines.map(line => `<div><p><strong>${line.count} ${line.type}${line.count > 1 ? 's' : ''}</strong><small>${money(line.rate)} × ${line.count} × ${line.nights} nights</small></p><strong>${money(line.total)}</strong></div>`).join('')}</div><div class="receipt-total"><span>Total</span><strong>${money(r.finalTotal)}</strong></div><footer>${icon('paw')}<p>Thank you for choosing UrbanCoop.</p><small>A happy stay for your best friend.</small></footer></article><div class="preview-actions">${savedPreview ? `${button('Home','home',true)}${button('New Receipt','newReceipt')}` : `${button('Edit Details','editReceipt',true)}${button(busy ? 'Saving...' : 'Save & Finish','saveReceipt',false,busy ? 'disabled' : '')}`}</div>`;
+  const charges = (r.additionalCharges || []).map(charge => `<div><p><strong>${e(charge.name)}</strong><small>Additional charge</small></p><strong>${money(charge.amount)}</strong></div>`).join('');
+  return `${!savedPreview ? '<p class="preview-hint">Review the details before saving.</p>' : '<p class="preview-hint">Saved receipt · Ready to share with your customer</p>'}<article class="receipt-paper"><div class="receipt-brand">${brand()}</div><div class="receipt-label"><span>BOARDING RECEIPT</span><strong>${e(r.receiptId || 'Preview · Not saved')}</strong></div>${r.createdDate ? `<p class="receipt-date">${e(r.createdDate)}</p>` : ''}<div class="receipt-customer"><small>CUSTOMER</small><h2>${e(r.customerName)}</h2>${r.contactNumber ? `<p>${e(r.contactNumber)}</p>` : ''}</div><div class="receipt-pets">${r.pets.map(p => `<span>${icon(p.type)}${e(p.name)}</span>`).join('')}</div><div class="receipt-dates"><div><small>CHECK-IN</small><strong>${e(r.checkInDate)}</strong></div><div><small>PICKUP</small><strong>${e(r.pickupDate)}</strong></div><div><small>STAY</small><strong>${r.nights} nights</strong></div></div><div class="receipt-lines">${r.lines.map(line => `<div><p><strong>${line.count} ${line.type}${line.count > 1 ? 's' : ''}</strong><small>${money(line.rate)} × ${line.count} × ${line.nights} nights</small></p><strong>${money(line.total)}</strong></div>`).join('')}${charges}</div><div class="receipt-total"><span>Total</span><strong>${money(r.finalTotal)}</strong></div><footer>${icon('paw')}<p>Thank you for choosing UrbanCoop.</p><small>A happy stay for your best friend.</small></footer></article><div class="preview-actions">${savedPreview ? `${button('Home','home',true)}${button('New Receipt','newReceipt')}` : `${button('Edit Details','editReceipt',true)}${button(busy ? 'Saving...' : 'Save & Finish','saveReceipt',false,busy ? 'disabled' : '')}`}</div>`;
 }
 function accountInput() { return { date: accounts.date, openingCash: accounts.openingCash, requestId: accounts.requestId, transactions: ['IN','OUT'].flatMap(type => accounts[type].filter(r => r.description.trim() || r.amount !== '').map(r => ({ ...r, type }))) }; }
 function accountSummary(value) {
@@ -103,13 +107,17 @@ function bind() {
     });
   });
   app.querySelectorAll('[data-remove]').forEach(el => el.addEventListener('click', () => { accounts[tab].splice(Number(el.dataset.remove), 1); dirty = true; accounts.requestId = crypto.randomUUID(); render(); }));
+  app.querySelectorAll('[data-charge-remove]').forEach(el => el.addEventListener('click', () => { receipt.additionalCharges.splice(Number(el.dataset.chargeRemove), 1); dirty = true; receipt.requestId = crypto.randomUUID(); render(); }));
   app.querySelectorAll('[data-receipt]').forEach(el => el.addEventListener('click', () => { preview = data[Number(el.dataset.receipt)]; savedPreview = true; navigate('preview'); }));
   app.querySelector('[name="historyDate"]')?.addEventListener('change', event => { historyDate = event.target.value; load(); });
   const rf = app.querySelector('#receipt-form');
   rf?.addEventListener('input', event => {
     const { name, value } = event.target;
-    const match = name.match(/^(dog|cat)Name-(\d+)$/);
-    if (match) receipt[`${match[1]}Names`][Number(match[2])] = value; else receipt[name] = value;
+    const petMatch = name.match(/^(dog|cat)Name-(\d+)$/);
+    const chargeMatch = name.match(/^charge(Name|Amount)-(\d+)$/);
+    if (petMatch) receipt[`${petMatch[1]}Names`][Number(petMatch[2])] = value;
+    else if (chargeMatch) receipt.additionalCharges[Number(chargeMatch[2])][chargeMatch[1].toLowerCase()] = value;
+    else receipt[name] = value;
     dirty = true; receipt.requestId = crypto.randomUUID();
     document.querySelector('#estimate').innerHTML = estimate();
     const pickup = rf.elements.pickupDate;
@@ -156,6 +164,7 @@ async function action(name) {
     await run(async () => { await api('logout'); user = null; route = 'home'; dirty = false; profile = false; receipt = blankReceipt(); accounts = blankAccounts(); preview = null; data = null; error = ''; status = ''; generation++; }); return;
   }
   if (name === 'addRows') { if (accounts.IN.length + accounts.OUT.length >= 200) return; accounts[tab].push(...Array.from({ length: Math.min(3,200-accounts.IN.length-accounts.OUT.length) }, () => ({ description: '', amount: '' }))); render(); return; }
+  if (name === 'addCharge') { if (receipt.additionalCharges.length >= 50) return; receipt.additionalCharges.push({ name: '', amount: '' }); dirty = true; receipt.requestId = crypto.randomUUID(); render(); return; }
   if (name === 'editReceipt') { navigate('receipt', true); return; }
   if (name === 'saveReceipt') {
     await run(async () => { preview = await api('receipts.create', { ...receiptInput(), requestId: receipt.requestId }); savedPreview = true; dirty = false; receipt = blankReceipt(); status = 'Receipt saved.'; }); return;

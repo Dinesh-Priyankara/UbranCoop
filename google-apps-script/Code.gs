@@ -41,7 +41,14 @@ function calculateReceipt(input) {
     return [{ type, count, nights, rate, total: count * nights * rate }];
   });
   const standardTotal = lines.reduce((sum, x) => sum + x.total, 0);
-  return { customerName, contactNumber, pets, checkInDate: input.checkInDate, pickupDate: input.pickupDate, nights, lines, standardTotal, finalTotal: standardTotal, pricingVersion: '2026-09-v1' };
+  if (!Array.isArray(input.additionalCharges ?? []) || (input.additionalCharges ?? []).length > 50) throw new Error('Use at most 50 additional charges.');
+  const additionalCharges = (input.additionalCharges ?? []).map(charge => {
+    const amount = cents(charge.amount);
+    if (!amount) throw new Error('Additional charge amounts must be greater than zero.');
+    return { name: textValue(charge.name, 'each additional charge name', 120), amount: amount / 100 };
+  });
+  const additionalChargesTotal = additionalCharges.reduce((sum, charge) => sum + Math.round(charge.amount * 100), 0) / 100;
+  return { customerName, contactNumber, pets, checkInDate: input.checkInDate, pickupDate: input.pickupDate, nights, lines, standardTotal, additionalCharges, additionalChargesTotal, finalTotal: standardTotal + additionalChargesTotal, pricingVersion: '2026-09-v2' };
 }
 function cents(value) {
   if (!/^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(String(value))) throw new Error('Enter a positive amount with up to 2 decimal places.');
@@ -66,7 +73,7 @@ function calculateAccounts(input, currentDate = today()) {
 
 // Google Apps Script adapter. Deploy generated Code.gs, with the Sheets advanced service enabled.
 const HEADERS = {
-  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetsJSON','CheckInDate','PickupDate','Nights','LinesJSON','StandardTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
+  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
   'Account Days': ['AccountDayID','Date','OpeningCash','TotalCashIn','TotalCashOut','ExpectedCash','Submitted','SubmittedAt','CreatedBy','Username','RequestID','RequestHash'],
   'Account Transactions': ['TransactionID','AccountDayID','Date','Type','Description','Amount']
 };
@@ -116,7 +123,12 @@ function appendRequest(ss, name, values) {
   return { appendCells: { sheetId: ss.getSheetByName(name).getSheetId(), rows: values.map(row => ({ values: row.map(v => ({ userEnteredValue: typeof v === 'number' ? { numberValue: v } : typeof v === 'boolean' ? { boolValue: v } : { stringValue: String(v ?? '') } })) })), fields: 'userEnteredValue' } };
 }
 function receiptFrom(row) {
-  return { receiptId: row[0], createdDate: row[1], createdAt: row[2], customerName: row[5], contactNumber: row[6], pets: JSON.parse(row[7]), checkInDate: row[8], pickupDate: row[9], nights: row[10], lines: JSON.parse(row[11]), standardTotal: row[12], finalTotal: row[13], pricingVersion: row[14] };
+  const names = String(row[7] || '').split(/\r?\n/).filter(Boolean);
+  const types = String(row[8] || '').split(/\r?\n/).filter(Boolean);
+  const lines = [['dog',12,13,14],['cat',15,16,17]].filter(x => Number(row[x[1]])).map(x => ({ type:x[0], count:Number(row[x[1]]), nights:Number(row[11]), rate:Number(row[x[2]]), total:Number(row[x[3]]) }));
+  const chargeNames = String(row[19] || '').split(/\r?\n/).filter(Boolean);
+  const chargeAmounts = String(row[20] || '').split(/\r?\n/).filter(Boolean);
+  return { receiptId:row[0], createdDate:row[1], createdAt:row[2], customerName:row[5], contactNumber:row[6], pets:names.map((name,i)=>({name,type:types[i]||'dog'})), checkInDate:row[9], pickupDate:row[10], nights:Number(row[11]), lines, standardTotal:Number(row[18]), additionalCharges:chargeNames.map((name,i)=>({name,amount:Number(chargeAmounts[i]||0)})), additionalChargesTotal:Number(row[21]||0), finalTotal:Number(row[22]), pricingVersion:row[23] };
 }
 function accountFrom(ss, row) {
   return { accountDayId: row[0], date: row[1], openingCash: row[2], totalCashIn: row[3], totalCashOut: row[4], expectedCash: row[5], submitted: row[6] === true, submittedAt: row[7], transactions: rows(ss, 'Account Transactions').filter(t => t[1] === row[0]).map(t => ({ type: t[3], description: t[4], amount: t[5] })) };
@@ -132,13 +144,15 @@ function executeRequest(ss, request) {
   const timestamp = new Date().toISOString();
   if (action === 'receipts.create') {
     const all = rows(ss, 'Receipts');
-    const previous = all.find(r => r[15] === data.requestId);
-    if (previous) { if (previous[16] !== hash) throw new Error('REPLAY'); return receiptFrom(previous); }
+    const previous = all.find(r => r[24] === data.requestId);
+    if (previous) { if (previous[25] !== hash) throw new Error('REPLAY'); return receiptFrom(previous); }
     const receipt = calculateReceipt(data);
     const prefix = 'UC-' + currentDate.replace(/-/g,'') + '-';
     const next = all.filter(r => String(r[0]).startsWith(prefix)).reduce((max,r) => Math.max(max, Number(String(r[0]).slice(prefix.length)) || 0), 0) + 1;
     const id = prefix + String(next).padStart(3,'0');
-    const row = [id,currentDate,timestamp,request.createdBy,request.username,receipt.customerName,receipt.contactNumber,JSON.stringify(receipt.pets),receipt.checkInDate,receipt.pickupDate,receipt.nights,JSON.stringify(receipt.lines),receipt.standardTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,hash];
+    const dog = receipt.lines.find(line => line.type === 'dog') || {};
+    const cat = receipt.lines.find(line => line.type === 'cat') || {};
+    const row = [id,currentDate,timestamp,request.createdBy,request.username,receipt.customerName,receipt.contactNumber,receipt.pets.map(p=>p.name).join('\n'),receipt.pets.map(p=>p.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count||0,dog.rate||0,dog.total||0,cat.count||0,cat.rate||0,cat.total||0,receipt.standardTotal,receipt.additionalCharges.map(c=>c.name).join('\n'),receipt.additionalCharges.map(c=>c.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,hash];
     Sheets.Spreadsheets.batchUpdate({ requests: [appendRequest(ss, 'Receipts', [row])] }, ss.getId());
     return receiptFrom(row);
   }

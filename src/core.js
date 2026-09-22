@@ -40,7 +40,14 @@ export function calculateReceipt(input) {
     return [{ type, count, nights, rate, total: count * nights * rate }];
   });
   const standardTotal = lines.reduce((sum, x) => sum + x.total, 0);
-  return { customerName, contactNumber, pets, checkInDate: input.checkInDate, pickupDate: input.pickupDate, nights, lines, standardTotal, finalTotal: standardTotal, pricingVersion: '2026-09-v1' };
+  if (!Array.isArray(input.additionalCharges ?? []) || (input.additionalCharges ?? []).length > 50) throw new Error('Use at most 50 additional charges.');
+  const additionalCharges = (input.additionalCharges ?? []).map(charge => {
+    const amount = cents(charge.amount);
+    if (!amount) throw new Error('Additional charge amounts must be greater than zero.');
+    return { name: textValue(charge.name, 'each additional charge name', 120), amount: amount / 100 };
+  });
+  const additionalChargesTotal = additionalCharges.reduce((sum, charge) => sum + Math.round(charge.amount * 100), 0) / 100;
+  return { customerName, contactNumber, pets, checkInDate: input.checkInDate, pickupDate: input.pickupDate, nights, lines, standardTotal, additionalCharges, additionalChargesTotal, finalTotal: standardTotal + additionalChargesTotal, pricingVersion: '2026-09-v2' };
 }
 export function cents(value) {
   if (!/^(0|[1-9]\d{0,8})(\.\d{1,2})?$/.test(String(value))) throw new Error('Enter a positive amount with up to 2 decimal places.');
