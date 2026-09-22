@@ -15,6 +15,15 @@ const SHEET_ID_ENV = {
 let tokenCache;
 let mutationQueue = Promise.resolve();
 
+function sheetsError(code, stage, details = {}) {
+  const error = new Error(code);
+  error.name = 'GoogleSheetsError';
+  error.code = code;
+  error.stage = stage;
+  error.details = details;
+  return error;
+}
+
 const bytesToBase64Url = bytes => {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -23,12 +32,47 @@ const bytesToBase64Url = bytes => {
 
 const textToBase64Url = value => bytesToBase64Url(new TextEncoder().encode(value));
 
-const pemBytes = pem => {
-  const body = pem.replace(/\\n/g, '\n').replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, '');
-  if (!body) throw new Error('CONFIGURATION');
-  const binary = atob(body);
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+export const pemBytes = value => {
+  let pem = String(value ?? '').trim().replace(/^\uFEFF/, '');
+  if (pem.startsWith('{') || (pem.startsWith('"') && pem.endsWith('"'))) {
+    try {
+      const parsed = JSON.parse(pem);
+      pem = typeof parsed === 'string' ? parsed : String(parsed?.private_key ?? '');
+    } catch {
+      throw sheetsError('SHEETS_CONFIGURATION', 'credentials.private_key_json', { format: 'invalid_json' });
+    }
+  }
+  pem = pem.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+  const match = pem.match(/^-----BEGIN PRIVATE KEY-----\n?([A-Za-z0-9+/=\n]+)\n?-----END PRIVATE KEY-----$/);
+  if (!match) {
+    const format = /^[a-f0-9]{40}$/i.test(pem) ? 'key_id' : 'invalid_pem';
+    throw sheetsError('SHEETS_CONFIGURATION', 'credentials.private_key_format', { format, length: pem.length });
+  }
+  try {
+    const binary = atob(match[1].replace(/\s/g, ''));
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
+  } catch {
+    throw sheetsError('SHEETS_CONFIGURATION', 'credentials.private_key_base64', { format: 'invalid_base64' });
+  }
 };
+
+async function resultJson(response, stage) {
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw sheetsError('SHEETS_UPSTREAM_RESPONSE', stage, { httpStatus: response.status });
+  }
+  if (!response.ok) {
+    throw sheetsError('SHEETS_UPSTREAM', stage, {
+      httpStatus: response.status,
+      upstreamCode: result?.error?.status || result?.error,
+      upstreamReason: result?.error?.errors?.[0]?.reason,
+      upstreamMessage: result?.error?.message || result?.error_description
+    });
+  }
+  return result;
+}
 
 async function accessToken(env) {
   if (tokenCache?.email === env.GOOGLE_SERVICE_ACCOUNT_EMAIL && tokenCache.expiresAt > Date.now() + 60000) return tokenCache.value;
@@ -42,7 +86,13 @@ async function accessToken(env) {
     exp: now + 3600
   }));
   const unsigned = `${header}.${claim}`;
-  const key = await crypto.subtle.importKey('pkcs8', pemBytes(env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  let key;
+  try {
+    key = await crypto.subtle.importKey('pkcs8', pemBytes(env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  } catch (error) {
+    if (error?.code) throw error;
+    throw sheetsError('SHEETS_CONFIGURATION', 'credentials.private_key_import', { errorName: error?.name });
+  }
   const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(unsigned));
   const assertion = `${unsigned}.${bytesToBase64Url(new Uint8Array(signature))}`;
   const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -51,29 +101,27 @@ async function accessToken(env) {
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
     signal: AbortSignal.timeout(12000)
   });
-  const result = await response.json();
-  if (!response.ok || typeof result.access_token !== 'string') throw new Error('SHEETS');
+  const result = await resultJson(response, 'oauth.token');
+  if (typeof result.access_token !== 'string') throw sheetsError('SHEETS_UPSTREAM_RESPONSE', 'oauth.token', { reason: 'missing_access_token' });
   tokenCache = { email: env.GOOGLE_SERVICE_ACCOUNT_EMAIL, value: result.access_token, expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000 };
   return tokenCache.value;
 }
 
-async function googleRequest(env, path, options = {}) {
+async function googleRequest(env, path, stage, options = {}) {
   const token = await accessToken(env);
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(env.GOOGLE_SHEET_ID)}${path}`, {
     ...options,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers },
     signal: AbortSignal.timeout(30000)
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error('SHEETS');
-  return result;
+  return resultJson(response, stage);
 }
 
 async function rows(env, name) {
   const range = encodeURIComponent(`'${name.replaceAll("'", "''")}'!A1:${String.fromCharCode(64 + HEADERS[name].length)}`);
-  const result = await googleRequest(env, `/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`);
+  const result = await googleRequest(env, `/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`, `sheets.read.${name}`);
   const values = result.values || [];
-  if (JSON.stringify(values[0] || []) !== JSON.stringify(HEADERS[name])) throw new Error('SHEETS');
+  if (JSON.stringify(values[0] || []) !== JSON.stringify(HEADERS[name])) throw sheetsError('SHEETS_SCHEMA', `sheets.schema.${name}`, { reason: 'header_mismatch' });
   return values.slice(1).map(row => Array.from({ length: HEADERS[name].length }, (_, index) => row[index] ?? ''));
 }
 
@@ -81,12 +129,12 @@ const cell = value => ({ userEnteredValue: typeof value === 'number' ? { numberV
 
 function appendRequest(env, name, values) {
   const sheetId = Number(env[SHEET_ID_ENV[name]]);
-  if (!Number.isInteger(sheetId)) throw new Error('CONFIGURATION');
+  if (!Number.isInteger(sheetId)) throw sheetsError('SHEETS_CONFIGURATION', `sheets.id.${name}`, { reason: 'invalid_sheet_id' });
   return { appendCells: { sheetId, rows: values.map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } };
 }
 
 async function append(env, requests) {
-  await googleRequest(env, ':batchUpdate', { method: 'POST', body: JSON.stringify({ requests }) });
+  await googleRequest(env, ':batchUpdate', 'sheets.batch_update', { method: 'POST', body: JSON.stringify({ requests }) });
 }
 
 async function hash(value) {
@@ -112,7 +160,7 @@ async function execute(env, action, data, user) {
     const day = (await rows(env, 'Account Days')).find(row => row[1] === data.date);
     return day ? accountFrom(day, await rows(env, 'Account Transactions')) : null;
   }
-  if (!['receipts.create', 'accounts.create'].includes(action) || !/^[0-9a-f-]{36}$/i.test(data.requestId || '')) throw new Error('SHEETS');
+  if (!['receipts.create', 'accounts.create'].includes(action) || !/^[0-9a-f-]{36}$/i.test(data.requestId || '')) throw sheetsError('SHEETS_REQUEST', 'request.validation');
   const requestHash = await hash([user.id, data]);
   const username = user.email.split('@')[0];
   const timestamp = new Date().toISOString();
@@ -121,7 +169,7 @@ async function execute(env, action, data, user) {
     const all = await rows(env, 'Receipts');
     const previous = all.find(row => row[15] === data.requestId);
     if (previous) {
-      if (previous[16] !== requestHash) throw new Error('SHEETS');
+      if (previous[16] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
       return receiptFrom(previous);
     }
     const receipt = calculateReceipt(data);
@@ -135,7 +183,7 @@ async function execute(env, action, data, user) {
   const all = await rows(env, 'Account Days');
   const previous = all.find(row => row[10] === data.requestId);
   if (previous) {
-    if (previous[11] !== requestHash) throw new Error('SHEETS');
+    if (previous[11] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
     return accountFrom(previous, await rows(env, 'Account Transactions'));
   }
   const account = calculateAccounts(data, currentDate);

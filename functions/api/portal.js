@@ -7,6 +7,25 @@ const json = (body, status, cookies = []) => {
   return new Response(JSON.stringify(body), { status, headers });
 };
 const fail = (code, status, cookies) => json({ ok: false, code }, status, cookies);
+const safeText = value => typeof value === 'string'
+  ? value.replace(/-----BEGIN[\s\S]*?-----END[^-]*-----/g, '[redacted]').replace(/eyJ[A-Za-z0-9._-]{40,}/g, '[redacted]').slice(0, 300)
+  : undefined;
+function logServerError(error, action) {
+  const details = error?.details || {};
+  console.error(JSON.stringify({
+    event: 'portal_backend_error',
+    action: typeof action === 'string' ? action.slice(0, 64) : 'unknown',
+    code: error?.code || error?.message || 'UNEXPECTED',
+    stage: error?.stage || 'portal',
+    httpStatus: details.httpStatus,
+    upstreamCode: safeText(details.upstreamCode),
+    upstreamReason: safeText(details.upstreamReason),
+    upstreamMessage: safeText(details.upstreamMessage),
+    reason: safeText(details.reason),
+    format: safeText(details.format),
+    errorName: safeText(details.errorName)
+  }));
+}
 function cookie(name, value, age, secure) {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${secure ? '; Secure' : ''}`;
 }
@@ -28,12 +47,14 @@ export async function onRequest({ request, env }) {
   if (request.headers.get('Origin') !== url.origin || request.headers.get('Sec-Fetch-Site') === 'cross-site') return fail('ORIGIN', 403);
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) return fail('CONTENT_TYPE', 415);
   let cookies = [];
+  let requestedAction = 'unknown';
   const secure = url.protocol === 'https:';
   const clear = () => ['uc_access', 'uc_refresh'].map(name => cookie(name, '', 0, secure));
   try {
     const raw = await request.text();
     if (raw.length > 100000) return fail('TOO_LARGE', 413);
     const { action, data = {} } = JSON.parse(raw);
+    requestedAction = action;
     if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY || !env.AUTH_EMAIL_DOMAIN) return fail('CONFIGURATION', 503);
     const saved = Object.fromEntries((request.headers.get('Cookie') || '').split(';').filter(v => v.includes('=')).map(v => { const i = v.indexOf('='); return [v.slice(0, i).trim(), decodeURIComponent(v.slice(i + 1))]; }));
     if (action === 'login') {
@@ -77,6 +98,8 @@ export async function onRequest({ request, env }) {
     const result = await sheets(env, action, clean, user);
     return json({ ok: true, data: result }, 200, cookies);
   } catch (error) {
-    return fail(error.message === 'LOCKED' ? 'LOCKED' : 'SERVER_ERROR', error.message === 'LOCKED' ? 409 : 502, cookies);
+    const locked = error?.message === 'LOCKED' || error?.code === 'LOCKED';
+    if (!locked) logServerError(error, requestedAction);
+    return fail(locked ? 'LOCKED' : 'SERVER_ERROR', locked ? 409 : 502, cookies);
   }
 }
