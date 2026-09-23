@@ -1,14 +1,25 @@
 // Google Apps Script adapter. Deploy generated Code.gs, with the Sheets advanced service enabled.
 const HEADERS = {
-  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
+  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','DiscountReason','DiscountRatePerNight','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
   'Account Days': ['AccountDayID','Date','OpeningCash','TotalCashIn','TotalCashOut','ExpectedCash','Submitted','SubmittedAt','CreatedBy','Username','RequestID','RequestHash'],
   'Account Transactions': ['TransactionID','AccountDayID','Date','Type','Description','Amount']
 };
+const PRE_DISCOUNT_RECEIPT_HEADERS = ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'];
+function migrateReceiptSchema(sheet) {
+  if (sheet.getLastRow() < 1) return;
+  const oldWidth = PRE_DISCOUNT_RECEIPT_HEADERS.length;
+  const header = sheet.getRange(1,1,1,oldWidth).getValues()[0];
+  if (JSON.stringify(header) !== JSON.stringify(PRE_DISCOUNT_RECEIPT_HEADERS)) return;
+  const values = sheet.getRange(1,1,sheet.getLastRow(),oldWidth).getValues();
+  const migrated = [HEADERS.Receipts].concat(values.slice(1).map(row => row.slice(0,19).concat(['',''],row.slice(19,26))));
+  sheet.getRange(1,1,migrated.length,HEADERS.Receipts.length).setValues(migrated);
+}
 function setup() {
   const ss = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));
   ss.setSpreadsheetTimeZone('Asia/Colombo');
   Object.keys(HEADERS).forEach(name => {
     const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
+    if (name === 'Receipts') migrateReceiptSchema(sheet);
     if (sheet.getLastRow() === 0) sheet.appendRow(HEADERS[name]);
     else if (JSON.stringify(sheet.getRange(1,1,1,HEADERS[name].length).getValues()[0]) !== JSON.stringify(HEADERS[name])) throw new Error('Header mismatch: ' + name);
     sheet.setFrozenRows(1);
@@ -43,6 +54,7 @@ function output(value) { return ContentService.createTextOutput(JSON.stringify(v
 function rows(ss, name) {
   const sheet = ss.getSheetByName(name);
   if (!sheet) throw new Error('SCHEMA');
+  if (name === 'Receipts') migrateReceiptSchema(sheet);
   if (JSON.stringify(sheet.getRange(1,1,1,HEADERS[name].length).getValues()[0]) !== JSON.stringify(HEADERS[name])) throw new Error('SCHEMA');
   return sheet.getLastRow() <= 1 ? [] : sheet.getRange(2,1,sheet.getLastRow()-1,HEADERS[name].length).getValues();
 }
@@ -53,9 +65,13 @@ function receiptFrom(row) {
   const names = String(row[7] || '').split(/\r?\n/).filter(Boolean);
   const types = String(row[8] || '').split(/\r?\n/).filter(Boolean);
   const lines = [['dog',12,13,14],['cat',15,16,17]].filter(x => Number(row[x[1]])).map(x => ({ type:x[0], count:Number(row[x[1]]), nights:Number(row[11]), rate:Number(row[x[2]]), total:Number(row[x[3]]) }));
-  const chargeNames = String(row[19] || '').split(/\r?\n/).filter(Boolean);
-  const chargeAmounts = String(row[20] || '').split(/\r?\n/).filter(Boolean);
-  return { receiptId:row[0], createdDate:row[1], createdAt:row[2], customerName:row[5], contactNumber:row[6], pets:names.map((name,i)=>({name,type:types[i]||'dog'})), checkInDate:row[9], pickupDate:row[10], nights:Number(row[11]), lines, standardTotal:Number(row[18]), additionalCharges:chargeNames.map((name,i)=>({name,amount:Number(chargeAmounts[i]||0)})), additionalChargesTotal:Number(row[21]||0), finalTotal:Number(row[22]), pricingVersion:row[23] };
+  const chargeNames = String(row[21] || '').split(/\r?\n/).filter(Boolean);
+  const chargeAmounts = String(row[22] || '').split(/\r?\n/).filter(Boolean);
+  const standardRatePerNight = lines.reduce((sum,line)=>sum+line.count*line.rate,0);
+  const standardTotal = lines.reduce((sum,line)=>sum+line.total,0);
+  const discountRatePerNight = row[20] === '' ? null : Number(row[20]);
+  const boardingTotal = Number(row[18]);
+  return { receiptId:row[0], createdDate:row[1], createdAt:row[2], customerName:row[5], contactNumber:row[6], pets:names.map((name,i)=>({name,type:types[i]||'dog'})), checkInDate:row[9], pickupDate:row[10], nights:Number(row[11]), lines, standardRatePerNight, standardTotal, discountReason:String(row[19]||''), discountRatePerNight, discountAmount:standardTotal-boardingTotal, boardingTotal, additionalCharges:chargeNames.map((name,i)=>({name,amount:Number(chargeAmounts[i]||0)})), additionalChargesTotal:Number(row[23]||0), finalTotal:Number(row[24]), pricingVersion:row[25] };
 }
 function accountFrom(ss, row) {
   return { accountDayId: row[0], date: row[1], openingCash: row[2], totalCashIn: row[3], totalCashOut: row[4], expectedCash: row[5], submitted: row[6] === true, submittedAt: row[7], transactions: rows(ss, 'Account Transactions').filter(t => t[1] === row[0]).map(t => ({ type: t[3], description: t[4], amount: t[5] })) };
@@ -71,15 +87,15 @@ function executeRequest(ss, request) {
   const timestamp = new Date().toISOString();
   if (action === 'receipts.create') {
     const all = rows(ss, 'Receipts');
-    const previous = all.find(r => r[24] === data.requestId);
-    if (previous) { if (previous[25] !== hash) throw new Error('REPLAY'); return receiptFrom(previous); }
+    const previous = all.find(r => r[26] === data.requestId);
+    if (previous) { if (previous[27] !== hash) throw new Error('REPLAY'); return receiptFrom(previous); }
     const receipt = calculateReceipt(data);
     const prefix = 'UC-' + currentDate.replace(/-/g,'') + '-';
     const next = all.filter(r => String(r[0]).startsWith(prefix)).reduce((max,r) => Math.max(max, Number(String(r[0]).slice(prefix.length)) || 0), 0) + 1;
     const id = prefix + String(next).padStart(3,'0');
     const dog = receipt.lines.find(line => line.type === 'dog') || {};
     const cat = receipt.lines.find(line => line.type === 'cat') || {};
-    const row = [id,currentDate,timestamp,request.createdBy,request.username,receipt.customerName,receipt.contactNumber,receipt.pets.map(p=>p.name).join('\n'),receipt.pets.map(p=>p.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count||0,dog.rate||0,dog.total||0,cat.count||0,cat.rate||0,cat.total||0,receipt.standardTotal,receipt.additionalCharges.map(c=>c.name).join('\n'),receipt.additionalCharges.map(c=>c.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,hash];
+    const row = [id,currentDate,timestamp,request.createdBy,request.username,receipt.customerName,receipt.contactNumber,receipt.pets.map(p=>p.name).join('\n'),receipt.pets.map(p=>p.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count||0,dog.rate||0,dog.total||0,cat.count||0,cat.rate||0,cat.total||0,receipt.boardingTotal,receipt.discountReason,receipt.discountRatePerNight??'',receipt.additionalCharges.map(c=>c.name).join('\n'),receipt.additionalCharges.map(c=>c.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,hash];
     Sheets.Spreadsheets.batchUpdate({ requests: [appendRequest(ss, 'Receipts', [row])] }, ss.getId());
     return receiptFrom(row);
   }

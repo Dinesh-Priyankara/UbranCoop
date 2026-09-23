@@ -79,6 +79,14 @@ main{padding:28px 24px}
 .stepper output{width:34px;text-align:center}
 .input-hint{font-size:12px;color:var(--red);margin:12px 0 0;line-height:1.5}
 .input-hint:empty{display:none}
+.discount-panel{border-top:1px solid var(--line);margin-top:22px;padding-top:22px}
+.discount-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}
+.discount-heading h3{font-size:15px;margin:0 0 5px}
+.discount-heading p{font-size:11px;color:var(--muted);margin:0}
+.discount-heading>strong{font-size:13px;color:var(--green);text-align:right}
+.discount-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.discount-grid .field{margin:0}
+.discount-note{font-size:11px;color:var(--muted);line-height:1.5;margin:12px 0 0}
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;border-radius:8px;background:var(--soft);color:var(--green);padding:7px 9px;letter-spacing:0}
 .badge .icon{width:14px;height:14px}
 .estimate h2{display:flex;justify-content:space-between;align-items:center}
@@ -86,6 +94,8 @@ main{padding:28px 24px}
 .summary-row>span:first-child{overflow-wrap:anywhere}
 .summary-row>strong,.summary-row>span:last-child{flex-shrink:0}
 .estimate .summary-row{font-size:12px}
+.estimate .standard-price{border-top:1px dashed #d4ddcb;padding-top:16px;margin-top:18px;color:var(--muted)}
+.estimate .discount-price strong{color:var(--green)}
 .summary-total{display:flex;justify-content:space-between;align-items:center;border-top:1px dashed #d4ddcb;padding-top:18px;margin-top:20px;font-size:13px}
 .summary-total strong{font-size:23px;color:var(--green)}
 .segmented{display:grid;grid-template-columns:1fr 1fr;padding:4px;background:#f0f1ea;border-radius:14px;margin-bottom:22px}
@@ -132,6 +142,8 @@ main{padding:28px 24px}
 .receipt-lines p{margin:0 0 18px}
 .receipt-lines small{display:block;color:var(--muted);font-size:10px;margin-top:7px}
 .receipt-lines>div>strong{white-space:nowrap}
+.receipt-lines .receipt-discount{border-top:1px dashed #d8dece;padding-top:16px}
+.receipt-lines .receipt-discount+div{border-top:0;padding-top:0}
 .receipt-total{display:flex;justify-content:space-between;align-items:center;background:#edf3e7;color:var(--green);padding:20px 16px;border-radius:12px;font-size:15px}
 .receipt-total strong{font-size:25px;letter-spacing:-.6px}
 .receipt-paper footer{text-align:center;color:#8b987e;padding-top:24px}
@@ -202,6 +214,7 @@ h1{font-size:25px}
 .receipt-total strong{font-size:22px}
 .date-grid{gap:8px}
 .date-grid input{font-size:13px;padding:10px 8px}
+.discount-grid{grid-template-columns:1fr}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}
 }

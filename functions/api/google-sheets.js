@@ -1,11 +1,12 @@
 import { calculateReceipt, calculateAccounts, dateValue, today } from '../../src/core.js';
 
 const HEADERS = {
-  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
+  Receipts: ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','DiscountReason','DiscountRatePerNight','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'],
   'Account Days': ['AccountDayID','Date','OpeningCash','TotalCashIn','TotalCashOut','ExpectedCash','Submitted','SubmittedAt','CreatedBy','Username','RequestID','RequestHash'],
   'Account Transactions': ['TransactionID','AccountDayID','Date','Type','Description','Amount']
 };
 const LEGACY_RECEIPT_HEADERS = ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetsJSON','CheckInDate','PickupDate','Nights','LinesJSON','StandardTotal','FinalTotal','PricingVersion','RequestID','RequestHash'];
+const PRE_DISCOUNT_RECEIPT_HEADERS = ['ReceiptID','CreatedDate','CreatedAt','CreatedBy','Username','CustomerName','ContactNumber','PetNames','PetTypes','CheckInDate','PickupDate','Nights','DogCount','DogRate','DogTotal','CatCount','CatRate','CatTotal','BoardingTotal','AdditionalChargeNames','AdditionalChargeAmounts','AdditionalChargesTotal','FinalTotal','PricingVersion','RequestID','RequestHash'];
 
 const SHEET_ID_ENV = {
   Receipts: 'GOOGLE_RECEIPTS_SHEET_ID',
@@ -119,11 +120,12 @@ async function googleRequest(env, path, stage, options = {}) {
 }
 
 async function rows(env, name) {
-  const range = encodeURIComponent(`'${name.replaceAll("'", "''")}'!A1:${String.fromCharCode(64 + HEADERS[name].length)}`);
+  const range = encodeURIComponent(`'${name.replaceAll("'", "''")}'!A1:${columnName(HEADERS[name].length)}`);
   const result = await googleRequest(env, `/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`, `sheets.read.${name}`);
   const values = result.values || [];
-  if (name === 'Receipts' && JSON.stringify(values[0] || []) === JSON.stringify(LEGACY_RECEIPT_HEADERS)) {
-    const migrated = values.slice(1).map(migrateLegacyReceiptRow);
+  const receiptHeaders = JSON.stringify(values[0] || []);
+  if (name === 'Receipts' && [JSON.stringify(LEGACY_RECEIPT_HEADERS), JSON.stringify(PRE_DISCOUNT_RECEIPT_HEADERS)].includes(receiptHeaders)) {
+    const migrated = values.slice(1).map(receiptHeaders === JSON.stringify(LEGACY_RECEIPT_HEADERS) ? migrateLegacyReceiptRow : migratePreDiscountReceiptRow);
     const sheetId = Number(env[SHEET_ID_ENV.Receipts]);
     await googleRequest(env, ':batchUpdate', 'sheets.schema.migrate.Receipts', { method: 'POST', body: JSON.stringify({ requests: [{ updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [HEADERS.Receipts, ...migrated].map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } }] }) });
     return migrated;
@@ -133,6 +135,11 @@ async function rows(env, name) {
 }
 
 const cell = value => ({ userEnteredValue: typeof value === 'number' ? { numberValue: value } : typeof value === 'boolean' ? { boolValue: value } : { stringValue: String(value ?? '') } });
+const columnName = count => {
+  let value = count, name = '';
+  while (value) { value--; name = String.fromCharCode(65 + value % 26) + name; value = Math.floor(value / 26); }
+  return name;
+};
 
 function appendRequest(env, name, values) {
   const sheetId = Number(env[SHEET_ID_ENV[name]]);
@@ -153,9 +160,13 @@ function receiptFrom(row) {
   const names = String(row[7] || '').split(/\r?\n/).filter(Boolean);
   const types = String(row[8] || '').split(/\r?\n/).filter(Boolean);
   const lines = [['dog',12,13,14],['cat',15,16,17]].filter(([,count]) => Number(row[count])).map(([type,count,rate,total]) => ({ type, count: Number(row[count]), nights: Number(row[11]), rate: Number(row[rate]), total: Number(row[total]) }));
-  const chargeNames = String(row[19] || '').split(/\r?\n/).filter(Boolean);
-  const chargeAmounts = String(row[20] || '').split(/\r?\n/).filter(Boolean);
-  return { receiptId: row[0], createdDate: row[1], createdAt: row[2], customerName: row[5], contactNumber: row[6], pets: names.map((name, index) => ({ name, type: types[index] || 'dog' })), checkInDate: row[9], pickupDate: row[10], nights: Number(row[11]), lines, standardTotal: Number(row[18]), additionalCharges: chargeNames.map((name, index) => ({ name, amount: Number(chargeAmounts[index] || 0) })), additionalChargesTotal: Number(row[21] || 0), finalTotal: Number(row[22]), pricingVersion: row[23] };
+  const chargeNames = String(row[21] || '').split(/\r?\n/).filter(Boolean);
+  const chargeAmounts = String(row[22] || '').split(/\r?\n/).filter(Boolean);
+  const standardRatePerNight = lines.reduce((sum, line) => sum + line.count * line.rate, 0);
+  const standardTotal = lines.reduce((sum, line) => sum + line.total, 0);
+  const discountRatePerNight = row[20] === '' || row[20] === undefined ? null : Number(row[20]);
+  const boardingTotal = Number(row[18]);
+  return { receiptId: row[0], createdDate: row[1], createdAt: row[2], customerName: row[5], contactNumber: row[6], pets: names.map((name, index) => ({ name, type: types[index] || 'dog' })), checkInDate: row[9], pickupDate: row[10], nights: Number(row[11]), lines, standardRatePerNight, standardTotal, discountReason: String(row[19] || ''), discountRatePerNight, discountAmount: standardTotal - boardingTotal, boardingTotal, additionalCharges: chargeNames.map((name, index) => ({ name, amount: Number(chargeAmounts[index] || 0) })), additionalChargesTotal: Number(row[23] || 0), finalTotal: Number(row[24]), pricingVersion: row[25] };
 }
 
 function migrateLegacyReceiptRow(row) {
@@ -163,7 +174,11 @@ function migrateLegacyReceiptRow(row) {
   const lines = JSON.parse(row[11] || '[]');
   const dog = lines.find(line => line.type === 'dog') || {};
   const cat = lines.find(line => line.type === 'cat') || {};
-  return [row[0],row[1],row[2],row[3],row[4],row[5],row[6],pets.map(pet => pet.name).join('\n'),pets.map(pet => pet.type).join('\n'),row[8],row[9],row[10],dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,row[12], '', '', 0,row[13],row[14],row[15],row[16]];
+  return [row[0],row[1],row[2],row[3],row[4],row[5],row[6],pets.map(pet => pet.name).join('\n'),pets.map(pet => pet.type).join('\n'),row[8],row[9],row[10],dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,row[12],'','', '', '',0,row[13],row[14],row[15],row[16]];
+}
+
+function migratePreDiscountReceiptRow(row) {
+  return [...row.slice(0, 19), '', '', ...row.slice(19, 26)];
 }
 
 function accountFrom(row, transactions) {
@@ -187,9 +202,9 @@ async function execute(env, action, data, user) {
   const currentDate = today();
   if (action === 'receipts.create') {
     const all = await rows(env, 'Receipts');
-    const previous = all.find(row => row[24] === data.requestId);
+    const previous = all.find(row => row[26] === data.requestId);
     if (previous) {
-      if (previous[25] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
+      if (previous[27] !== requestHash) throw sheetsError('SHEETS_REQUEST', 'request.idempotency', { reason: 'request_hash_mismatch' });
       return receiptFrom(previous);
     }
     const receipt = calculateReceipt(data);
@@ -198,7 +213,7 @@ async function execute(env, action, data, user) {
     const id = `${prefix}${String(next).padStart(3, '0')}`;
     const dog = receipt.lines.find(line => line.type === 'dog') || {};
     const cat = receipt.lines.find(line => line.type === 'cat') || {};
-    const row = [id,currentDate,timestamp,user.id,username,receipt.customerName,receipt.contactNumber,receipt.pets.map(pet => pet.name).join('\n'),receipt.pets.map(pet => pet.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,receipt.standardTotal,receipt.additionalCharges.map(charge => charge.name).join('\n'),receipt.additionalCharges.map(charge => charge.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,requestHash];
+    const row = [id,currentDate,timestamp,user.id,username,receipt.customerName,receipt.contactNumber,receipt.pets.map(pet => pet.name).join('\n'),receipt.pets.map(pet => pet.type).join('\n'),receipt.checkInDate,receipt.pickupDate,receipt.nights,dog.count || 0,dog.rate || 0,dog.total || 0,cat.count || 0,cat.rate || 0,cat.total || 0,receipt.boardingTotal,receipt.discountReason,receipt.discountRatePerNight ?? '',receipt.additionalCharges.map(charge => charge.name).join('\n'),receipt.additionalCharges.map(charge => charge.amount).join('\n'),receipt.additionalChargesTotal,receipt.finalTotal,receipt.pricingVersion,data.requestId,requestHash];
     await append(env, [appendRequest(env, 'Receipts', [row])]);
     return receiptFrom(row);
   }
