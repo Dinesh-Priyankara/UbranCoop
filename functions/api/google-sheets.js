@@ -127,7 +127,10 @@ async function rows(env, name) {
   if (name === 'Receipts' && [JSON.stringify(LEGACY_RECEIPT_HEADERS), JSON.stringify(PRE_DISCOUNT_RECEIPT_HEADERS)].includes(receiptHeaders)) {
     const migrated = values.slice(1).map(receiptHeaders === JSON.stringify(LEGACY_RECEIPT_HEADERS) ? migrateLegacyReceiptRow : migratePreDiscountReceiptRow);
     const sheetId = Number(env[SHEET_ID_ENV.Receipts]);
-    await googleRequest(env, ':batchUpdate', 'sheets.schema.migrate.Receipts', { method: 'POST', body: JSON.stringify({ requests: [{ updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [HEADERS.Receipts, ...migrated].map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } }] }) });
+    await googleRequest(env, ':batchUpdate', 'sheets.schema.migrate.Receipts', { method: 'POST', body: JSON.stringify({ requests: [
+      { insertDimension: { range: { sheetId, dimension: 'COLUMNS', startIndex: PRE_DISCOUNT_RECEIPT_HEADERS.length, endIndex: HEADERS.Receipts.length }, inheritFromBefore: true } },
+      { updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [HEADERS.Receipts, ...migrated].map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } }
+    ] }) });
     return migrated;
   }
   if (JSON.stringify(values[0] || []) !== JSON.stringify(HEADERS[name])) throw sheetsError('SHEETS_SCHEMA', `sheets.schema.${name}`, { reason: 'header_mismatch' });
