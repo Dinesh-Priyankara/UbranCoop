@@ -13,6 +13,8 @@ function migrateReceiptSchema(sheet) {
   const values = sheet.getRange(1,1,sheet.getLastRow(),oldWidth).getValues();
   const migrated = [HEADERS.Receipts].concat(values.slice(1).map(row => row.slice(0,19).concat(['',''],row.slice(19,26))));
   sheet.getRange(1,1,migrated.length,HEADERS.Receipts.length).setValues(migrated);
+  sheet.setColumnWidth(20,150);
+  sheet.setColumnWidth(21,190);
 }
 function setup() {
   const ss = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));

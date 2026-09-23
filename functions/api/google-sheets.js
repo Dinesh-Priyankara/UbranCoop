@@ -129,6 +129,8 @@ async function rows(env, name) {
     const sheetId = Number(env[SHEET_ID_ENV.Receipts]);
     await googleRequest(env, ':batchUpdate', 'sheets.schema.migrate.Receipts', { method: 'POST', body: JSON.stringify({ requests: [
       { insertDimension: { range: { sheetId, dimension: 'COLUMNS', startIndex: PRE_DISCOUNT_RECEIPT_HEADERS.length, endIndex: HEADERS.Receipts.length }, inheritFromBefore: true } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 19, endIndex: 20 }, properties: { pixelSize: 150 }, fields: 'pixelSize' } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 20, endIndex: 21 }, properties: { pixelSize: 190 }, fields: 'pixelSize' } },
       { updateCells: { start: { sheetId, rowIndex: 0, columnIndex: 0 }, rows: [HEADERS.Receipts, ...migrated].map(row => ({ values: row.map(cell) })), fields: 'userEnteredValue' } }
     ] }) });
     return migrated;
